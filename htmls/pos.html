@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>POS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="/styles/app.css"/>
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js" crossorigin="anonymous"></script>
+  <script src="/js/pos.js" defer></script>
+</head>
+<body>
+  <main class="content" style="display:block;background:#f8fafc;">
+    <header class="topbar">
+      <div class="title">POS</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <a href="/htmls/index.html" class="badge" style="text-decoration:none;">Internal System</a>
+        <a href="/htmls/ecom.html" class="badge" style="text-decoration:none;">E-Commerce</a>
+      </div>
+    </header>
+
+    <section class="shop">
+      <div class="shop-main">
+        <div class="card" style="margin-bottom:12px;">
+          <h3 style="margin:0;">Point of Sale</h3>
+          <div style="display:flex;gap:12px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+            <label for="pos-customer">Customer:</label>
+            <select id="pos-customer" style="min-width:260px;">
+              <option value="">-- Select customer --</option>
+            </select>
+
+            <label for="pos-terminal" style="margin-left:12px;">Terminal:</label>
+            <select id="pos-terminal" style="min-width:240px;">
+              <option value="">-- Select terminal --</option>
+            </select>
+            <button id="pos-refresh-terminals" class="btn">Refresh</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 style="margin:0 0 8px 0;">Products</h3>
+          <div id="pos-products" class="product-grid"></div>
+        </div>
+      </div>
+
+      <aside class="cart-panel open" id="pos-cart">
+        <div class="cart-header">
+          <div class="cart-title">Cart</div>
+          <button class="cart-toggle" id="pos-cart-toggle" title="Collapse">»</button>
+        </div>
+        <div class="cart-shopper" id="pos-cart-info">No customer / terminal selected</div>
+        <div class="cart-items" id="pos-cart-items"></div>
+        <div class="cart-footer">
+          <div class="cart-total">
+            <div>Total</div>
+            <div id="pos-cart-total">0.00 AED</div>
+          </div>
+          <button id="pos-checkout" class="btn-primary">Checkout</button>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <!-- Modal -->
+  <div class="modal-overlay" id="pos-modal" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">Send to Terminal</div>
+        <button class="modal-close" id="pos-modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="pos-terminal-message" style="padding:12px;border:1px dashed #cbd5e1;border-radius:12px;">
+          <!-- filled by JS on checkout -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast" hidden>
+    <div class="toast-accent"></div>
+    <div class="toast-content">
+      <div class="toast-title">Action needed</div>
+      <div class="toast-msg">Message</div>
+    </div>
+    <button class="toast-close" id="toast-close" aria-label="Close">✕</button>
+  </div>
+</body>
+</html>
