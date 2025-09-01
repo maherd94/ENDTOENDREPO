@@ -135,39 +135,95 @@
           }
         });
       }
-    //   function genOrderRef(){ return 'ord_' + Date.now() + String(Math.floor(Math.random()*1000)).padStart(3,'0'); }
-      $('#pos-pbl').on('click', async function(e){
-        e.preventDefault();
-        const shopperRef = window.POS.getShopperRef && window.POS.getShopperRef();
-        const { value, currency } = window.POS.getCartAmount ? window.POS.getCartAmount() : { value:0, currency:'AED' };
-      
-        if (!shopperRef) { showToast('Choose a customer to continue'); return; }
-        if (!value)      { showToast('Your cart is empty'); return; }
-      
-        // Build a friendly description, optional
-        const itemNames = Object.values(state.cart || {}).map(ci => ci.product.name);
-        const desc = itemNames.length ? (itemNames[0] + (itemNames.length > 1 ? ` + ${itemNames.length-1} more` : '')) : 'Order';
-      
-        // Create the link
-        const reference = genOrderRef();
-        try {
-          const res = await createPaymentLink({
-            reference,
-            shopperReference: shopperRef,
-            amount: { value, currency },
-            description: desc
+
+      function createPblOrder(payload){
+        return new Promise((resolve, reject) => {
+          $.ajax({
+            url: '/apis/create_pbl_order.php',
+            method: 'POST',
+            contentType: 'application/json',
+            dataType: 'json',
+            data: JSON.stringify(payload),
+            success: resolve,
+            error: (xhr, _s, e) => reject({ message: e, raw: xhr && xhr.responseText })
           });
-          if (!res || !res.ok) {
-            showToast('Failed to create Pay by Link', 'Error');
-            return;
-          }
-          renderPblResult(res);
-          openPblModal();
-        } catch (err) {
-          console.error('PBL error', err);
-          showToast('Could not create Pay by Link', 'Error');
-        }
+        });
+      }
+
+      
+
+    //   function genOrderRef(){ return 'ord_' + Date.now() + String(Math.floor(Math.random()*1000)).padStart(3,'0'); }
+    // Replace your existing Pay by Link handler with this:
+$('#pos-pbl').off('click').on('click', async function(e){
+  e.preventDefault();
+
+  const shopperRef = window.POS.getShopperRef && window.POS.getShopperRef();
+  const { value, currency } = window.POS.getCartAmount ? window.POS.getCartAmount() : { value:0, currency:'AED' };
+
+  if (!shopperRef) { showToast('Choose a customer to continue'); return; }
+  if (!value)      { showToast('Your cart is empty'); return; }
+
+  // Short description from cart (optional)
+  const itemNames = Object.values((window.state || state || {} ).cart || {}).map(ci => ci.product.name);
+  const desc = itemNames.length ? (itemNames[0] + (itemNames.length > 1 ? ` + ${itemNames.length-1} more` : '')) : 'Order';
+
+  // Build ord_* reference and items array
+  const reference = typeof genOrderRef === 'function'
+    ? genOrderRef()
+    : 'ord_' + Date.now() + String(Math.floor(Math.random()*1000)).padStart(3,'0');
+
+  const cartObj = (window.state || state || {}).cart || {};
+  const items = Object.values(cartObj).map(ci => ({
+    productId: Number(ci.product.id),
+    qty: Number(ci.qty)
+  }));
+
+  const $btn = $(this).prop('disabled', true);
+
+  try {
+    // 1) Create the payment link
+    const pbl = await createPaymentLink({
+      reference,
+      shopperReference: shopperRef,
+      amount: { value, currency },
+      description: desc
+    });
+    if (!pbl || !pbl.ok) { showToast('Failed to create Pay by Link', 'Error'); return; }
+
+    // Show QR/link modal
+    renderPblResult(pbl);
+    openPblModal();
+
+    // 2) Create the matching order so the webhook can update it later
+    try {
+      const order = await createPblOrder({
+        reference,
+        shopperReference: shopperRef,
+        items,
+        amount: { value, currency },
+        notes: { source: 'PBL', from: 'POS' }
+        // storeId: <optional override>
       });
+      if (order && order.ok) {
+        showToast(`Order created (#${order.order_id})`, 'Success');
+        const meta = $('#pbl-meta').text();
+        $('#pbl-meta').text((meta ? meta + ' • ' : '') + `Order #${order.order_id}`);
+      } else {
+        showToast('Link created, but saving order failed', 'Warning');
+        console.warn('create_pbl_order response:', order);
+      }
+    } catch (err) {
+      showToast('Link created, but saving order failed', 'Warning');
+      console.error('create_pbl_order error:', err.raw || err.message || err);
+    }
+  } catch (err) {
+    showToast('Could not create Pay by Link', 'Error');
+    console.error('payment_links_create error:', err.raw || err.message || err);
+  } finally {
+    $btn.prop('disabled', false);
+  }
+});
+
                   
 
     function decodeReceiptLines(arr) { const lines = []; (arr || []).forEach(o => { const txt = (o && o.Text) || ''; const map = Object.fromEntries(txt.split('&').map(p => { const [k, v] = p.split('='); try { return [k, decodeURIComponent(v || '')] } catch { return [k, v || ''] } })); if (map.name && (map.value || map.key)) lines.push(`${map.name}${map.value ? ': ' + map.value : ''}`); else if (txt) lines.push(txt); }); return lines; }

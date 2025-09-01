@@ -79,7 +79,7 @@ try {
     if ($shopperEmail)  $payload['shopperEmail'] = $shopperEmail;
 
     // Call Adyen
-    $url = $base . '/checkout/v70/paymentLinks';
+    $url = $base . '/v70/paymentLinks';
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
