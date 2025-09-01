@@ -4,23 +4,12 @@ require_once __DIR__ . '/../bootstrap.php';
 
 /**
  * Adyen Standard Webhook (classic notifications, JSON)
- * Example item shape:
- *  body.notificationItems[0].NotificationRequestItem = {
- *    eventCode: "AUTHORISATION",
- *    success: "true",
- *    merchantReference: "ord_...",
- *    pspReference: "...",
- *    amount: { currency: "AED", value: 46500 },
- *    paymentMethod: "visa",
- *    additionalData: { ... }
- *  }
- *
- * - NO HMAC validation (explicitly disabled)
- * - If any item fails → respond 400 with JSON error details
- * - Else → respond "[accepted]"
+ * - No HMAC validation
+ * - If any item fails -> 400 with JSON details; otherwise "[accepted]"
+ * - Pay by Link: on AUTHORISATION success, mark payment_links as PAID
  */
 
-/* ---------------- Response helpers ---------------- */
+/* ---------- Response helpers ---------- */
 function respondAccepted(): void {
     header('Content-Type: text/plain; charset=utf-8');
     http_response_code(200);
@@ -34,19 +23,7 @@ function respondError(int $status, string $message, array $details = []): void {
     exit;
 }
 
-/* ---------------- Optional Basic Auth (disabled) ---------------- */
-// $basicUser = env('ADYEN_WEBHOOK_BASIC_USER');
-// $basicPass = env('ADYEN_WEBHOOK_BASIC_PASS');
-// if (($basicUser ?? '') !== '' || ($basicPass ?? '') !== '') {
-//     $user = $_SERVER['PHP_AUTH_USER'] ?? '';
-//     $pass = $_SERVER['PHP_AUTH_PW']   ?? '';
-//     if (!hash_equals((string)$basicUser, $user) || !hash_equals((string)$basicPass, $pass)) {
-//         header('WWW-Authenticate: Basic realm="Webhook"');
-//         respondError(401, 'Unauthorized');
-//     }
-// }
-
-/* ---------------- Parse JSON body ---------------- */
+/* ---------- Parse JSON body ---------- */
 $raw = file_get_contents('php://input') ?: '';
 $body = json_decode($raw, true);
 if (!is_array($body)) {
@@ -59,14 +36,14 @@ if (!$items) {
     respondError(400, 'No notificationItems in payload');
 }
 
-/* ---------------- DB bootstrap ---------------- */
+/* ---------- DB ---------- */
 try {
     db()->exec('SET search_path TO "ENDTOEND", public');
 } catch (Throwable $e) {
     respondError(500, 'DB connection error', ['message' => $e->getMessage()]);
 }
 
-/* ---------------- Helpers ---------------- */
+/* ---------- Helpers ---------- */
 function findOrderIdByMerchantReference(PDO $pdo, string $merchantRef): ?int {
     $st = $pdo->prepare('SELECT id FROM orders WHERE order_number = :r LIMIT 1');
     $st->execute([':r' => $merchantRef]);
@@ -129,22 +106,47 @@ function mapTxnStatus(bool $success): string {
     return $success ? 'SUCCESS' : 'FAILED';
 }
 
-/* Safely extract payment method (fallback order) */
+/* Extractors */
 function extractPaymentMethod(array $nri): string {
     if (!empty($nri['paymentMethod'])) return (string)$nri['paymentMethod'];
     if (!empty($nri['additionalData']['cardPaymentMethod'])) return (string)$nri['additionalData']['cardPaymentMethod'];
     if (!empty($nri['additionalData']['paymentMethod'])) return (string)$nri['additionalData']['paymentMethod'];
     return '';
 }
-
-/* Safely extract amount & currency */
 function extractAmount(array $nri): array {
     $value    = isset($nri['amount']['value']) ? (int)$nri['amount']['value'] : (int)($nri['additionalData']['authorisedAmountValue'] ?? 0);
     $currency = isset($nri['amount']['currency']) ? (string)$nri['amount']['currency'] : (string)($nri['additionalData']['authorisedAmountCurrency'] ?? 'AED');
     return ['value' => $value, 'currency' => $currency];
 }
+function extractPaymentLinkId(array $nri): ?string {
+    // Payment Links add this in additionalData as 'paymentLinkId'
+    $id = $nri['additionalData']['paymentLinkId'] ?? null;
+    if (is_string($id) && $id !== '') return $id;
+    return null;
+}
 
-/* ---------------- Process each notification item ---------------- */
+/* Pay-by-Link updater */
+function markPaymentLinkPaid(PDO $pdo, array $args): void {
+    // args: merchantRef, pspRef, linkId?
+    $merchantRef = $args['merchantRef'];
+    $pspRef      = $args['pspRef'];
+    $linkId      = $args['linkId'] ?? null;
+
+    if ($linkId) {
+        $st = $pdo->prepare("UPDATE payment_links
+            SET status='PAID', paid_at = now(), psp_ref = COALESCE(psp_ref, :psp)
+            WHERE link_id = :lid AND status <> 'PAID'");
+        $st->execute([':psp' => $pspRef, ':lid' => $linkId]);
+        if ($st->rowCount() > 0) return; // done
+    }
+    // fallback by merchantReference (ord_*)
+    $st2 = $pdo->prepare("UPDATE payment_links
+        SET status='PAID', paid_at = now(), psp_ref = COALESCE(psp_ref, :psp)
+        WHERE order_number = :ord AND status <> 'PAID'");
+    $st2->execute([':psp' => $pspRef, ':ord' => $merchantRef]);
+}
+
+/* ---------- Process items ---------- */
 $errors = [];
 
 foreach ($items as $i => $wrap) {
@@ -164,6 +166,7 @@ foreach ($items as $i => $wrap) {
         $amt          = extractAmount($nri);
         $amountMinor  = (int)$amt['value'];
         $currency     = (string)$amt['currency'];
+        $pblId        = extractPaymentLinkId($nri); // Pay-by-Link id if present
 
         if ($merchantRef === '') {
             $errors[] = ['index' => $i, 'error' => 'Empty merchantReference'];
@@ -174,8 +177,20 @@ foreach ($items as $i => $wrap) {
             continue;
         }
 
+        // Best-effort PBL update on successful AUTHORISATION even if no order yet
+        if ($eventCode === 'AUTHORISATION' && $success === true) {
+            try {
+                markPaymentLinkPaid(db(), ['merchantRef' => $merchantRef, 'pspRef' => $pspRef, 'linkId' => $pblId]);
+            } catch (\Throwable $ignore) { /* don't fail item on PBL-only issues */ }
+        }
+
         $orderId = findOrderIdByMerchantReference(db(), $merchantRef);
         if ($orderId === null) {
+            // If this seems like a Pay-by-Link (has paymentLinkId), we don't fail the item—let PBL be the source of truth.
+            if ($pblId) {
+                // No order yet, but PBL updated; skip order/txn without error.
+                continue;
+            }
             $errors[] = ['index' => $i, 'merchantReference' => $merchantRef, 'error' => 'Order not found'];
             continue;
         }
@@ -198,7 +213,7 @@ foreach ($items as $i => $wrap) {
     }
 }
 
-/* ---------------- Finalize response ---------------- */
+/* ---------- Finalize ---------- */
 if (!empty($errors)) {
     respondError(400, 'One or more notification items failed', $errors);
 }

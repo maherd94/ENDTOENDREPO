@@ -87,6 +87,89 @@
         });
     }
 
+    function openPblModal() { $('#pbl-modal').prop('hidden', false).attr('aria-hidden', 'false'); }
+    function closePblModal() { $('#pbl-modal').prop('hidden', true).attr('aria-hidden', 'true'); }
+    $('#pbl-modal-close').on('click', closePblModal);
+    $('#pbl-modal').on('click', e => { if (e.target === e.currentTarget) closePblModal(); });
+    $(document).on('keydown', e => { if (e.key === 'Escape') closePblModal(); });
+    $('#pbl-modal').prop('hidden', true).attr('aria-hidden', 'true');
+
+    function createPaymentLink(payload){
+        return new Promise((resolve, reject) => {
+          $.ajax({
+            url: '/apis/payment_links_create.php',
+            method: 'POST',
+            contentType: 'application/json',
+            dataType: 'json',
+            data: JSON.stringify(payload),
+            success: resolve,
+            error: (xhr, _s, e) => reject({ message: e, raw: xhr && xhr.responseText })
+          });
+        });
+      }
+      function renderPblResult(pbl){
+        const url = pbl && pbl.url ? pbl.url : '';
+        const exp = pbl && pbl.expiresAt ? pbl.expiresAt : '';
+        $('#pbl-url').attr('href', url).text(url || '—');
+        $('#pbl-meta').text(exp ? `Expires ${exp}` : 'Expires —');
+      
+        // QR plugin fallback
+        const $qr = $('#pbl-qr').empty();
+        if ($.fn.qrcode && url) {
+          try {
+            $qr.qrcode({ width: 220, height: 220, text: url });
+          } catch (e) {
+            $qr.text('QR unavailable');
+          }
+        } else {
+          $qr.text('QR unavailable');
+        }
+      
+        $('#pbl-copy').off('click').on('click', async function(){
+          try {
+            await navigator.clipboard.writeText(url);
+            $(this).text('Copied').prop('disabled', true);
+            setTimeout(() => { $('#pbl-copy').text('Copy').prop('disabled', false); }, 1200);
+          } catch {
+            alert('Copy failed');
+          }
+        });
+      }
+    //   function genOrderRef(){ return 'ord_' + Date.now() + String(Math.floor(Math.random()*1000)).padStart(3,'0'); }
+      $('#pos-pbl').on('click', async function(e){
+        e.preventDefault();
+        const shopperRef = window.POS.getShopperRef && window.POS.getShopperRef();
+        const { value, currency } = window.POS.getCartAmount ? window.POS.getCartAmount() : { value:0, currency:'AED' };
+      
+        if (!shopperRef) { showToast('Choose a customer to continue'); return; }
+        if (!value)      { showToast('Your cart is empty'); return; }
+      
+        // Build a friendly description, optional
+        const itemNames = Object.values(state.cart || {}).map(ci => ci.product.name);
+        const desc = itemNames.length ? (itemNames[0] + (itemNames.length > 1 ? ` + ${itemNames.length-1} more` : '')) : 'Order';
+      
+        // Create the link
+        const reference = genOrderRef();
+        try {
+          const res = await createPaymentLink({
+            reference,
+            shopperReference: shopperRef,
+            amount: { value, currency },
+            description: desc
+          });
+          if (!res || !res.ok) {
+            showToast('Failed to create Pay by Link', 'Error');
+            return;
+          }
+          renderPblResult(res);
+          openPblModal();
+        } catch (err) {
+          console.error('PBL error', err);
+          showToast('Could not create Pay by Link', 'Error');
+        }
+      });
+                  
+
     function decodeReceiptLines(arr) { const lines = []; (arr || []).forEach(o => { const txt = (o && o.Text) || ''; const map = Object.fromEntries(txt.split('&').map(p => { const [k, v] = p.split('='); try { return [k, decodeURIComponent(v || '')] } catch { return [k, v || ''] } })); if (map.name && (map.value || map.key)) lines.push(`${map.name}${map.value ? ': ' + map.value : ''}`); else if (txt) lines.push(txt); }); return lines; }
 
     function renderTerminalResponse(resp) {

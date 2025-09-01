@@ -6,6 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <link rel="stylesheet" href="/styles/app.css"/>
   <script src="https://code.jquery.com/jquery-3.7.1.min.js" crossorigin="anonymous"></script>
+  <script src="https://www.jqueryscript.net/demo/qr-code-logo-label/dist/jquery-qrcode.js"></script>
+
   <script src="/js/pos.js" defer></script>
 </head>
 <body>
@@ -55,6 +57,8 @@
             <div id="pos-cart-total">0.00 AED</div>
           </div>
           <button id="pos-checkout" class="btn-primary">Checkout</button>
+
+          <button id="pos-pbl" class="btn">Pay by Link</button>
         </div>
       </aside>
     </section>
@@ -70,6 +74,27 @@
       <div class="modal-body">
         <div id="pos-terminal-message" style="padding:12px;border:1px dashed #cbd5e1;border-radius:12px;">
           <!-- filled by JS on checkout -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PBL Modal -->
+<div class="modal-overlay" id="pbl-modal" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">Pay by Link</div>
+        <button class="modal-close" id="pbl-modal-close">✕</button>
+      </div>
+      <div class="modal-body" style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+        <div id="pbl-qr" style="width:220px;height:220px;border:1px dashed #cbd5e1;border-radius:12px;display:flex;align-items:center;justify-content:center;">QR</div>
+        <div style="flex:1; min-width:260px;">
+          <div style="font-weight:600; margin-bottom:6px;">Link</div>
+          <div id="pbl-url-wrap" style="display:flex; gap:8px; align-items:center;">
+            <a id="pbl-url" href="#" target="_blank" rel="noopener" style="word-break:break-all;">—</a>
+            <button id="pbl-copy" class="btn-ghost" title="Copy link">Copy</button>
+          </div>
+          <div id="pbl-meta" class="muted" style="margin-top:8px; font-size:12px;">Expires —</div>
         </div>
       </div>
     </div>
