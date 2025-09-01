@@ -31,7 +31,7 @@ abstract class Option implements IteratorAggregate
     /**
      * Creates an option given a return value.
      *
-     * This is intended for consuming existing APIs and allows you to easily
+     * This is intended for consuming existing apis and allows you to easily
      * convert them to an option. By default, we treat ``null`` as the None
      * case, and everything else as Some.
      *
@@ -78,7 +78,7 @@ abstract class Option implements IteratorAggregate
     /**
      * Creates a lazy-option with the given callback.
      *
-     * This is also a helper constructor for lazy-consuming existing APIs where
+     * This is also a helper constructor for lazy-consuming existing apis where
      * the return value is not yet an option. By default, we treat ``null`` as
      * None case, and everything else as Some.
      *

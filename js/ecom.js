@@ -182,13 +182,13 @@
 
         openModal();
         // TODO: Initialize Adyen payment sheet here
-        // - Optionally call /APIs/create_order.php to create order & return a Checkout Session
+        // - Optionally call /apis/create_order.php to create order & return a Checkout Session
         // - Mount the session in #payment-sheet
     });
 
     // ---------- Load data ----------
     function loadProducts() {
-        return $.getJSON('/APIs/products_list.php').then(res => {
+        return $.getJSON('/apis/products_list.php').then(res => {
             state.products = (res.data || []).map(p => ({
                 id: Number(p.id),
                 sku: p.sku,
@@ -201,7 +201,7 @@
     }
     function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
     function loadCustomers() {
-        return $.getJSON('/APIs/customers_list.php').then(res => {
+        return $.getJSON('/apis/customers_list.php').then(res => {
             const $sel = $('#ecom-customer').empty().append('<option value="">-- Select shopper --</option>');
             (res.data || []).forEach(c => {
                 const name = c.display_name || capitalize(String(c.email || '').split('@')[0] || '');
