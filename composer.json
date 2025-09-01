@@ -1,0 +1,30 @@
+{
+    "name": "maher/endtoend",
+    "type": "project",
+    "require": {
+      "php": ">=7.0.0",
+      "ext-pdo": "*",
+      "ext-pdo_pgsql": "*",
+      "vlucas/phpdotenv": "^5.6"
+    },
+    "autoload": {
+      "psr-4": {
+        "Maher\\Endtoend\\": "src/"
+      }
+    },
+    "authors": [
+      {
+        "name": "maherd94",
+        "email": "maher.daher@adyen.com"
+      }
+    ],
+    "config": {
+      "optimize-autoloader": true,
+      "sort-packages": true
+    },
+    "scripts": {
+      "start": "php -S localhost:8000 -t .",
+      "dump": "composer dump-autoload -o"
+    }
+  }
+  

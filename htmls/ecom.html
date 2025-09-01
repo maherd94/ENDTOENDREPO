@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="/styles/app.css"/>
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js" crossorigin="anonymous"></script>
+  <script src="/js/ecom.js" defer></script>
+  <script src="/js/adyenecom.js" defer></script>
+  <script src="https://checkoutshopper-live.cdn.adyen.com/checkoutshopper/sdk/6.11.0/adyen.js"
+  integrity="sha384-wwiuyx0VwdDwaHvlLtdCKeUuFCNIMDrWrQI24PdEMMMGgOZPHirMZfXHNgrk6DG5"
+  crossorigin="anonymous"></script>
+
+<link rel="stylesheet" href="https://checkoutshopper-live.cdn.adyen.com/checkoutshopper/sdk/6.11.0/adyen.css"
+  integrity="sha384-grpuyJ9vAlVrx/mBLXLO3V2f9W3m5KKYx34MzigvvPqArvi0WqWoD/Pl++yf15EU" crossorigin="anonymous">
+</head>
+<body>
+  <main class="content" style="display:block;background:#f8fafc;">
+    <header class="topbar">
+      <div class="title">Shop</div>
+      <a href="/htmls/index.html" class="badge" style="text-decoration:none;">Internal System</a>
+    </header>
+
+    <section class="shop">
+      <div class="shop-main">
+        <div class="card" style="margin-bottom:12px;">
+          <h3 style="margin:0;">E-Commerce</h3>
+          <div style="display:flex;gap:12px;align-items:center;margin-top:8px;">
+            <label for="ecom-customer">Shopper:</label>
+            <select id="ecom-customer" style="min-width:280px;">
+              <option value="">-- Select shopper --</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 style="margin:0 0 8px 0;">Products</h3>
+          <div id="ecom-products" class="product-grid"></div>
+        </div>
+      </div>
+
+      <aside class="cart-panel open" id="ecom-cart">
+        <div class="cart-header">
+          <div class="cart-title">Cart</div>
+          <button class="cart-toggle" id="ecom-cart-toggle" title="Collapse">»</button>
+        </div>
+        <div class="cart-shopper" id="ecom-cart-shopper">No shopper selected</div>
+        <div class="cart-items" id="ecom-cart-items"></div>
+        <div class="cart-footer">
+          <div class="cart-total">
+            <div>Total</div>
+            <div id="ecom-cart-total">0.00 AED</div>
+          </div>
+          <button id="ecom-checkout" class="btn-primary">Checkout</button>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <!-- Modal for payment sheet -->
+  <div class="modal-overlay" id="ecom-modal" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">Checkout</div>
+        <button class="modal-close" id="ecom-modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="payment-sheet" style="min-height:320px;border:0px dashed #cbd5e1;border-radius:12px;display:flex;align-items:center;justify-content:center;">
+          <div style="opacity:.7;">Loading payment sheet ....</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- Toast -->
+<div id="toast" class="toast" hidden>
+    <div class="toast-accent"></div>
+    <div class="toast-content">
+      <div class="toast-title">Action needed</div>
+      <div class="toast-msg">Choose a shopper to continue</div>
+    </div>
+    <button class="toast-close" id="toast-close" aria-label="Close">✕</button>
+  </div>
+  
+</body>
+</html>
