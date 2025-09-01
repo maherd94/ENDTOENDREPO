@@ -109,7 +109,7 @@ try {
         .toast-accent{width:6px;height:100%;background:#22c55e;border-top-left-radius:12px;border-bottom-left-radius:12px;}
         .toast-content{padding:12px 6px 12px 8px;max-width:64ch;}
         .toast-title{font-weight:700;margin-bottom:2px}
-        .toast-msg{opacity:.9}
+        .toast-msg{opacity:1;color:#FFFFFF;}
         .toast-close{border:0;background:transparent;color:#fff;opacity:.8;font-size:14px;padding:8px;cursor:pointer;margin-right:6px}
         .toast-close:hover{opacity:1}
       </style>
