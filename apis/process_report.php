@@ -65,18 +65,31 @@ function downloadCsv(string $url, string $apiKey, ?string &$serverFilename = nul
     file_put_contents($tmp, $body);
     return $tmp;
 }
+
+/**
+ * CSV reader compatible with PHP 8.3+ (explicit $escape arg) and BOM-safe.
+ */
 function readCsv(string $file): Generator {
     $fh = fopen($file, 'r');
     if (!$fh) throw new RuntimeException('Cannot open CSV');
-    $headers = fgetcsv($fh);
-    if (!$headers) { fclose($fh); throw new RuntimeException('Empty CSV'); }
+
+    // delimiter ',', enclosure '"', escape '\\'
+    $headers = fgetcsv($fh, 0, ',', '"', '\\');
+    if ($headers === false) { fclose($fh); throw new RuntimeException('Empty CSV'); }
+
+    // Normalize headers & strip BOM on first header if present
     $headers = array_map(static fn($h) => trim((string)$h), $headers);
-    while (($row = fgetcsv($fh)) !== false) {
+    if (isset($headers[0])) {
+        $headers[0] = preg_replace('/^\xEF\xBB\xBF/', '', $headers[0]);
+    }
+
+    while (($row = fgetcsv($fh, 0, ',', '"', '\\')) !== false) {
         $row = array_pad($row, count($headers), null);
         yield array_combine($headers, array_map(static fn($v) => is_string($v) ? trim($v) : $v, $row));
     }
     fclose($fh);
 }
+
 function currencyExponent(string $ccy): int {
     $ccy = strtoupper($ccy);
     $zero = ['JPY','KRW','CLP','VND','MGA','UGX','XOF','XAF','XPF','KMF','BIF','DJF','GNF','PYG','RWF','VUV'];
@@ -160,7 +173,6 @@ function upsertSettlementParent(array $agg, ?string $reportPspRef, string $repor
 
 function upsertSettlementDetail(array $r, ?int $settlementId): void {
     $pdo = db();
-    // If you created a UNIQUE constraint, keep this WHERE in sync.
     $sel = $pdo->prepare("
         SELECT id FROM settlement_details
          WHERE psp_reference = :psp
