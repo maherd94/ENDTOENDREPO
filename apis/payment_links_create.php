@@ -49,7 +49,7 @@ try {
     $shopperEmail = $cust && !empty($cust['email']) ? (string)$cust['email'] : null;
 
     // Env/config
-    $base   = rtrim(env('ADYEN_CHECKOUT_BASE_URL', 'https://checkout-test.adyen.com'), '/');
+    $base   = rtrim(env('ADYEN_PBL_CHECKOUT_BASE_URL', 'https://checkout-test.adyen.com'), '/');
     $apiKey = env('ADYEN_CHECKOUT_API_KEY', '');
     $mca    = env('ADYEN_PBL_MERCHANT_ID', '') ?: env('ADYEN_POS_MERCHANT_ID', '');
     $retUrl = env('ADYEN_DEFAULT_RETURN_URL', 'http://127.0.0.1:8080/htmls/thanks.html');
