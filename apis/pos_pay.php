@@ -25,11 +25,12 @@ try {
         exit;
     }
 
-    $terminalId = trim((string)($in['terminalId'] ?? ''));
-    $amount     = $in['amount'] ?? null; // {value (minor), currency}
-    $txId       = trim((string)($in['transactionId'] ?? ''));
-    $currency   = isset($amount['currency']) ? (string)$amount['currency'] : 'AED';
-    $minor      = isset($amount['value']) ? (int)$amount['value'] : 0;
+    $terminalId      = trim((string)($in['terminalId'] ?? ''));
+    $amount          = $in['amount'] ?? null; // {value (minor), currency}
+    $txId            = trim((string)($in['transactionId'] ?? ''));
+    $shopperRef      = trim((string)($in['shopperReference'] ?? '')); // tokenization hint
+    $currency        = isset($amount['currency']) ? (string)$amount['currency'] : 'AED';
+    $minor           = isset($amount['value']) ? (int)$amount['value'] : 0;
 
     if ($terminalId === '' || $minor <= 0) {
         http_response_code(400);
@@ -47,6 +48,14 @@ try {
     $serviceId = (string)mt_rand(100, 999); // simple numeric service ID
     $timestamp = gmdate('Y-m-d\TH:i:s.v\Z'); // e.g., 2025-09-01T11:25:34.528Z
 
+    // Build SaleToAcquirerData as a plain key=value string (NO base64)
+    // Example: "recurringProcessingModel=UnscheduledCardOnFile&shopperReference=12345"
+    $saleToAcquirerData = null;
+    if ($shopperRef !== '') {
+        $saleToAcquirerData = 'recurringProcessingModel=UnscheduledCardOnFile'
+                            . '&shopperReference=' . $shopperRef;
+    }
+
     $payload = [
         'SaleToPOIRequest' => [
             'MessageHeader' => [
@@ -59,12 +68,14 @@ try {
                 'POIID'           => $terminalId,
             ],
             'PaymentRequest' => [
-                'SaleData' => [
+                'SaleData' => array_filter([
                     'SaleTransactionID' => [
                         'TransactionID' => $txId,
                         'TimeStamp'     => $timestamp,
                     ],
-                ],
+                    'SaleToAcquirerData' => $saleToAcquirerData, // plain KV string
+                    'TokenRequestedType'=> 'Customer'
+                ]),
                 'PaymentTransaction' => [
                     'AmountsReq' => [
                         'Currency'        => $currency,
@@ -110,7 +121,6 @@ try {
         exit;
     }
 
-    // Pass through upstream response + echo our context
     $json = json_decode($respBody, true);
     if (!is_array($json)) {
         http_response_code(502);
@@ -119,12 +129,13 @@ try {
     }
 
     echo json_encode([
-        'ok'           => true,
-        'terminalId'   => $terminalId,
-        'merchantId'   => $merchant,
-        'transactionId'=> $txId,
-        'request'      => $payload,
-        'response'     => $json,
+        'ok'               => true,
+        'terminalId'       => $terminalId,
+        'merchantId'       => $merchant,
+        'transactionId'    => $txId,
+        'shopperReference' => $shopperRef ?: null,
+        'request'          => $payload,
+        'response'         => $json,
     ], JSON_UNESCAPED_UNICODE);
 } catch (Throwable $e) {
     http_response_code(500);

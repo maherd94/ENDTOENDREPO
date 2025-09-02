@@ -125,6 +125,9 @@ $(document).ready(function () {
               const payload = {
                 reference: currentRef,                     // same reference as session
                 shopperReference: currentShopperRef,
+                shopperInteraction:'Ecommerce',
+                storePaymentMethodMode:'enabled',
+                recurringProcessingModel:'CardOnFile',
                 amount: currentAmount,                     // {value, currency}
                 items: items,                              // [{productId, qty}]
                 pspReference: result && result.pspReference ? result.pspReference : null,
@@ -191,6 +194,7 @@ $(document).ready(function () {
         shopperReference: currentShopperRef,
         countryCode: 'AE',
         shopperInteraction: 'Ecommerce',
+        storePaymentMethodMode:'enabled',
         recurringProcessingModel: 'CardOnFile'
       };
       const li = getOrderItems();

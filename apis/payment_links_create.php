@@ -45,7 +45,7 @@ try {
     $st = db()->prepare('SELECT id, email FROM customers WHERE shopper_reference = :sr LIMIT 1');
     $st->execute([':sr' => $shopperRef]);
     $cust = $st->fetch();
-    $customerId = $cust ? (int)$cust['id'] : null;
+    $customerId   = $cust ? (int)$cust['id'] : null;
     $shopperEmail = $cust && !empty($cust['email']) ? (string)$cust['email'] : null;
 
     // Env/config
@@ -62,7 +62,7 @@ try {
         exit;
     }
 
-    // Build PBL payload
+    // Build Pay by Link payload (request tokenization)
     $expiresAt = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('+24 hours')->format('c');
     $payload = [
         'reference'       => $reference,
@@ -74,6 +74,11 @@ try {
         'returnUrl'       => $retUrl,
         'reusable'        => false,
         'expiresAt'       => $expiresAt,
+
+        // Tokenization signals
+        'storePaymentMethodMode'       => 'enabled',
+        'recurringProcessingModel' => 'CardOnFile',
+        'shopperInteraction'       => 'Ecommerce'
     ];
     if ($description)   $payload['description'] = $description;
     if ($shopperEmail)  $payload['shopperEmail'] = $shopperEmail;
@@ -129,6 +134,7 @@ try {
     ");
     $meta = [
         'description' => $description,
+        'tokenizationRequested' => true
     ];
     $ins->execute([
         ':link_id'          => $linkId,
