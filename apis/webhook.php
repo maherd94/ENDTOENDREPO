@@ -5,10 +5,10 @@ require_once __DIR__ . '/../bootstrap.php';
 /**
  * Adyen Standard Webhook (classic notifications, JSON)
  * - No HMAC validation
- * - Updates orders on successful events (AUTHORISATION/CAPTURE/REFUND/...)
+ * - Persists each NotificationRequestItem to ENDTOEND.webhook_events immediately
+ * - Updates orders/transactions after
  * - Pay by Link: on AUTHORISATION success, marks payment_links as PAID (if paymentLinkId present)
- * - REFUND: merchantReference may be something like "rf_ord_1756480926656260_1756798720"
- *           We extract the embedded "ord_..." to resolve the order, else fall back to originalReference lookup.
+ * - REFUND: merchantReference can be custom (e.g., "rf_ord_..."); we extract embedded ord_... for lookup
  */
 
 /* ---------- Response helpers ---------- */
@@ -71,10 +71,12 @@ function updateOrderStatus(PDO $pdo, int $orderId, ?string $status = null, ?stri
         $st->execute([':p' => $pspRef, ':id' => $orderId]);
     }
 }
-function insertTransaction(PDO $pdo, int $orderId, string $type, string $status, int $amountMinor, string $currency, ?string $pspRef, ?string $rawMethod): void {
+/** Insert a transaction and return its ID */
+function insertTransaction(PDO $pdo, int $orderId, string $type, string $status, int $amountMinor, string $currency, ?string $pspRef, ?string $rawMethod): int {
     $st = $pdo->prepare('
         INSERT INTO transactions (order_id, type, status, amount_minor, currency, psp_ref, raw_method)
         VALUES (:order_id, :type, :status, :amt, :cur, :psp, :method)
+        RETURNING id
     ');
     $st->execute([
         ':order_id' => $orderId,
@@ -85,6 +87,7 @@ function insertTransaction(PDO $pdo, int $orderId, string $type, string $status,
         ':psp'      => $pspRef,
         ':method'   => $rawMethod
     ]);
+    return (int)$st->fetchColumn();
 }
 
 /* Map eventCode -> order status (successes only) */
@@ -128,14 +131,13 @@ function extractAmount(array $nri): array {
     return ['value' => $value, 'currency' => $currency];
 }
 function extractPaymentLinkId(array $nri): ?string {
-    // Common keys seen for Pay by Link
     $ad = $nri['additionalData'] ?? [];
     foreach (['paymentLinkId', 'paymentLinkReference', 'pblId'] as $k) {
         if (!empty($ad[$k]) && is_string($ad[$k])) return $ad[$k];
     }
     return null;
 }
-/** For REFUND: Extract embedded ord_... from merchantReference like "rf_ord_1756480926656260_1756798720" */
+/** For REFUND: Extract embedded ord_... from merchantReference like "rf_ord_..." */
 function extractOrdFromRefundMerchantRef(string $merchantRef): ?string {
     if ($merchantRef === '') return null;
     if (preg_match('/(ord_[A-Za-z0-9_]+)/', $merchantRef, $m)) {
@@ -146,7 +148,6 @@ function extractOrdFromRefundMerchantRef(string $merchantRef): ?string {
 
 /* Pay-by-Link updater */
 function markPaymentLinkPaid(PDO $pdo, array $args): void {
-    // args: merchantRef, pspRef, linkId?
     $merchantRef = $args['merchantRef'];
     $pspRef      = $args['pspRef'];
     $linkId      = $args['linkId'] ?? null;
@@ -158,11 +159,39 @@ function markPaymentLinkPaid(PDO $pdo, array $args): void {
         $st->execute([':psp' => $pspRef, ':lid' => $linkId]);
         if ($st->rowCount() > 0) return;
     }
-    // fallback by merchantReference (ord_*)
     $st2 = $pdo->prepare("UPDATE payment_links
         SET status='PAID', paid_at = now(), psp_ref = COALESCE(psp_ref, :psp)
         WHERE order_number = :ord AND status <> 'PAID'");
     $st2->execute([':psp' => $pspRef, ':ord' => $merchantRef]);
+}
+
+/* ---------- New: Webhook event persistence ---------- */
+/** Insert one webhook_events row per notification item, return event ID */
+function insertWebhookEvent(PDO $pdo, string $eventCode, array $payload): int {
+    $st = $pdo->prepare('
+        INSERT INTO webhook_events (event_code, payload_json)
+        VALUES (:ec, CAST(:payload AS jsonb))
+        RETURNING id
+    ');
+    $st->execute([
+        ':ec'       => $eventCode,
+        ':payload'  => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    return (int)$st->fetchColumn();
+}
+/** Update webhook_events row with order/transaction links (no overwrite if already set) */
+function updateWebhookEventLinks(PDO $pdo, int $eventId, ?int $orderId = null, ?int $txnId = null): void {
+    $st = $pdo->prepare('
+        UPDATE webhook_events
+           SET order_id = COALESCE(:oid, order_id),
+               transaction_id = COALESCE(:tid, transaction_id)
+         WHERE id = :id
+    ');
+    $st->execute([
+        ':oid' => $orderId,
+        ':tid' => $txnId,
+        ':id'  => $eventId,
+    ]);
 }
 
 /* ---------- Process items ---------- */
@@ -192,13 +221,22 @@ foreach ($items as $i => $wrap) {
             continue;
         }
 
+        /* --- Persist the raw item FIRST --- */
+        $eventId = null;
+        try {
+            $eventId = insertWebhookEvent(db(), $eventCode, $nri);
+        } catch (Throwable $e) {
+            // Don't block processing; record and continue
+            $errors[] = ['index' => $i, 'error' => 'Failed to persist webhook event', 'details' => $e->getMessage()];
+        }
+
         // Pay-by-Link marking (best-effort) on successful AUTHORISATION
         if ($eventCode === 'AUTHORISATION' && $success === true) {
             try {
                 if ($merchantRef !== '' || $pblId) {
                     markPaymentLinkPaid(db(), ['merchantRef' => $merchantRef, 'pspRef' => $pspRef, 'linkId' => $pblId]);
                 }
-            } catch (\Throwable $ignore) { /* do not fail item on PBL-only issues */ }
+            } catch (\Throwable $ignore) { /* best-effort */ }
         }
 
         // Work out which merchant reference to use for order lookup
@@ -212,10 +250,7 @@ foreach ($items as $i => $wrap) {
             }
         }
 
-        // Order resolution path:
-        // 1) By (possibly adjusted) merchant reference (ord_...)
-        // 2) If not found and REFUND has originalReference, try by original PSP ref
-        // 3) Else, if PBL-only event and no order → skip without error
+        // Resolve order
         $orderId = null;
         if ($lookupMerchantRef !== '') {
             $orderId = findOrderIdByMerchantReference(db(), $lookupMerchantRef);
@@ -226,9 +261,9 @@ foreach ($items as $i => $wrap) {
         if ($orderId === null) {
             if ($pblId && $eventCode === 'AUTHORISATION' && $success === true) {
                 // PBL only; order might be created later—do not fail the item
+                // If we have an event row, tag the order_id when the order exists later (via some backfill if needed)
                 continue;
             }
-            // No order matched; record as error to surface misalignments
             $errors[] = [
                 'index' => $i,
                 'eventCode' => $eventCode,
@@ -240,20 +275,28 @@ foreach ($items as $i => $wrap) {
             continue;
         }
 
+        // If we logged the event, attach order_id now
+        if ($eventId) {
+            try { updateWebhookEventLinks(db(), $eventId, $orderId, null); } catch (\Throwable $ignore) {}
+        }
+
         // Insert transaction (AUTH/CAPTURE/REFUND/etc.)
         $txnType   = mapTxnType($eventCode);
         $txnStatus = mapTxnStatus($success);
-        // For txn reference, keep the current event's pspReference (refund psp on REFUND, auth psp on AUTH, etc.)
         $txnRef    = $pspRef !== '' ? $pspRef : ($origRef !== '' ? $origRef : null);
 
-        insertTransaction(db(), $orderId, $txnType, $txnStatus, $amountMinor, $currency, $txnRef, $method);
+        $txnId = insertTransaction(db(), $orderId, $txnType, $txnStatus, $amountMinor, $currency, $txnRef, $method);
+
+        // Attach transaction_id to the stored webhook event row
+        if ($eventId && $txnId) {
+            try { updateWebhookEventLinks(db(), $eventId, null, $txnId); } catch (\Throwable $ignore) {}
+        }
 
         // Update order status on positive events; also attach psp_ref when relevant
         $orderStatus = mapOrderStatus($eventCode, $success);
         if ($orderStatus !== null) {
             updateOrderStatus(db(), $orderId, $orderStatus, $pspRef !== '' ? $pspRef : null);
         } elseif ($pspRef !== '') {
-            // At least ensure psp_ref is set once (e.g., first AUTH might have done it already)
             updateOrderStatus(db(), $orderId, null, $pspRef);
         }
     } catch (Throwable $e) {
