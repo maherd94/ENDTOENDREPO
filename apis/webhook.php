@@ -6,7 +6,9 @@ require_once __DIR__ . '/../bootstrap.php';
  * Adyen Standard Webhook (classic notifications, JSON)
  * - No HMAC validation
  * - If any item fails -> 400 with JSON details; otherwise "[accepted]"
- * - Pay by Link: on AUTHORISATION success, mark payment_links as PAID
+ * - Pay by Link:
+ *    - on AUTHORISATION success => mark payment_links as PAID
+ *    - on REFUND success        => mark payment_links as REFUNDED
  */
 
 /* ---------- Response helpers ---------- */
@@ -26,15 +28,10 @@ function respondError(int $status, string $message, array $details = []): void {
 /* ---------- Parse JSON body ---------- */
 $raw = file_get_contents('php://input') ?: '';
 $body = json_decode($raw, true);
-if (!is_array($body)) {
-    respondError(400, 'Invalid JSON body');
-}
-$items = isset($body['notificationItems']) && is_array($body['notificationItems'])
-    ? $body['notificationItems']
-    : [];
-if (!$items) {
-    respondError(400, 'No notificationItems in payload');
-}
+if (!is_array($body)) respondError(400, 'Invalid JSON body');
+
+$items = isset($body['notificationItems']) && is_array($body['notificationItems']) ? $body['notificationItems'] : [];
+if (!$items) respondError(400, 'No notificationItems in payload');
 
 /* ---------- DB ---------- */
 try {
@@ -49,6 +46,21 @@ function findOrderIdByMerchantReference(PDO $pdo, string $merchantRef): ?int {
     $st->execute([':r' => $merchantRef]);
     $id = $st->fetchColumn();
     return $id ? (int)$id : null;
+}
+function getOrderAmountMinor(PDO $pdo, int $orderId): ?int {
+    $st = $pdo->prepare('SELECT amount_minor FROM orders WHERE id = :id');
+    $st->execute([':id' => $orderId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    return $row ? (int)$row['amount_minor'] : null;
+}
+function sumRefundedMinor(PDO $pdo, int $orderId): int {
+    $st = $pdo->prepare("
+        SELECT COALESCE(SUM(amount_minor),0) AS s
+          FROM transactions
+         WHERE order_id = :id AND type = 'REFUND' AND status = 'SUCCESS'
+    ");
+    $st->execute([':id' => $orderId]);
+    return (int)$st->fetchColumn();
 }
 function updateOrderStatus(PDO $pdo, int $orderId, ?string $status = null, ?string $pspRef = null): void {
     if ($status !== null && $pspRef !== null) {
@@ -78,15 +90,15 @@ function insertTransaction(PDO $pdo, int $orderId, string $type, string $status,
     ]);
 }
 
-/* Map eventCode -> order status (successes only) */
+/* Map eventCode -> order status (successes only, REFUND handled separately) */
 function mapOrderStatus(string $eventCode, bool $success): ?string {
     if (!$success) return null;
     static $map = [
         'AUTHORISATION' => 'AUTHORISED',
         'CAPTURE'       => 'CAPTURED',
-        'REFUND'        => 'REFUNDED',
         'CANCELLATION'  => 'CANCELLED',
         'CHARGEBACK'    => 'CHARGEBACK',
+        // 'REFUND' handled by refund logic
     ];
     return $map[$eventCode] ?? null;
 }
@@ -119,15 +131,12 @@ function extractAmount(array $nri): array {
     return ['value' => $value, 'currency' => $currency];
 }
 function extractPaymentLinkId(array $nri): ?string {
-    // Payment Links add this in additionalData as 'paymentLinkId'
     $id = $nri['additionalData']['paymentLinkId'] ?? null;
-    if (is_string($id) && $id !== '') return $id;
-    return null;
+    return (is_string($id) && $id !== '') ? $id : null;
 }
 
-/* Pay-by-Link updater */
+/* Pay-by-Link updaters */
 function markPaymentLinkPaid(PDO $pdo, array $args): void {
-    // args: merchantRef, pspRef, linkId?
     $merchantRef = $args['merchantRef'];
     $pspRef      = $args['pspRef'];
     $linkId      = $args['linkId'] ?? null;
@@ -137,13 +146,28 @@ function markPaymentLinkPaid(PDO $pdo, array $args): void {
             SET status='PAID', paid_at = now(), psp_ref = COALESCE(psp_ref, :psp)
             WHERE link_id = :lid AND status <> 'PAID'");
         $st->execute([':psp' => $pspRef, ':lid' => $linkId]);
-        if ($st->rowCount() > 0) return; // done
+        if ($st->rowCount() > 0) return;
     }
-    // fallback by merchantReference (ord_*)
     $st2 = $pdo->prepare("UPDATE payment_links
         SET status='PAID', paid_at = now(), psp_ref = COALESCE(psp_ref, :psp)
         WHERE order_number = :ord AND status <> 'PAID'");
     $st2->execute([':psp' => $pspRef, ':ord' => $merchantRef]);
+}
+function markPaymentLinkRefunded(PDO $pdo, array $args): void {
+    $merchantRef = $args['merchantRef'];
+    $linkId      = $args['linkId'] ?? null;
+
+    if ($linkId) {
+        $st = $pdo->prepare("UPDATE payment_links
+            SET status='REFUNDED', refunded_at = now()
+            WHERE link_id = :lid AND status <> 'REFUNDED'");
+        $st->execute([':lid' => $linkId]);
+        if ($st->rowCount() > 0) return;
+    }
+    $st2 = $pdo->prepare("UPDATE payment_links
+        SET status='REFUNDED', refunded_at = now()
+        WHERE order_number = :ord AND status <> 'REFUNDED'");
+    $st2->execute([':ord' => $merchantRef]);
 }
 
 /* ---------- Process items ---------- */
@@ -166,7 +190,7 @@ foreach ($items as $i => $wrap) {
         $amt          = extractAmount($nri);
         $amountMinor  = (int)$amt['value'];
         $currency     = (string)$amt['currency'];
-        $pblId        = extractPaymentLinkId($nri); // Pay-by-Link id if present
+        $pblId        = extractPaymentLinkId($nri);
 
         if ($merchantRef === '') {
             $errors[] = ['index' => $i, 'error' => 'Empty merchantReference'];
@@ -177,20 +201,19 @@ foreach ($items as $i => $wrap) {
             continue;
         }
 
-        // Best-effort PBL update on successful AUTHORISATION even if no order yet
+        // Best-effort PBL updates (even if order not yet created)
         if ($eventCode === 'AUTHORISATION' && $success === true) {
-            try {
-                markPaymentLinkPaid(db(), ['merchantRef' => $merchantRef, 'pspRef' => $pspRef, 'linkId' => $pblId]);
-            } catch (\Throwable $ignore) { /* don't fail item on PBL-only issues */ }
+            try { markPaymentLinkPaid(db(), ['merchantRef' => $merchantRef, 'pspRef' => $pspRef, 'linkId' => $pblId]); }
+            catch (\Throwable $ignore) {}
+        } elseif ($eventCode === 'REFUND' && $success === true) {
+            try { markPaymentLinkRefunded(db(), ['merchantRef' => $merchantRef, 'linkId' => $pblId]); }
+            catch (\Throwable $ignore) {}
         }
 
+        // Find local order (if not present and it's a PBL item, we accept silently)
         $orderId = findOrderIdByMerchantReference(db(), $merchantRef);
         if ($orderId === null) {
-            // If this seems like a Pay-by-Link (has paymentLinkId), we don't fail the item—let PBL be the source of truth.
-            if ($pblId) {
-                // No order yet, but PBL updated; skip order/txn without error.
-                continue;
-            }
+            if ($pblId) continue; // accept item without an order
             $errors[] = ['index' => $i, 'merchantReference' => $merchantRef, 'error' => 'Order not found'];
             continue;
         }
@@ -202,10 +225,25 @@ foreach ($items as $i => $wrap) {
 
         insertTransaction(db(), $orderId, $txnType, $txnStatus, $amountMinor, $currency, $txnRef, $method);
 
-        // Update order status on positive events
+        // Update order status for non-refund *success* events via simple map
         $orderStatus = mapOrderStatus($eventCode, $success);
         if ($orderStatus !== null) {
             updateOrderStatus(db(), $orderId, $orderStatus, $pspRef !== '' ? $pspRef : null);
+        }
+
+        // Special handling for REFUND success: only mark REFUNDED when fully refunded
+        if ($eventCode === 'REFUND' && $success === true) {
+            $orderTotal = getOrderAmountMinor(db(), $orderId);
+            if ($orderTotal !== null) {
+                $refunded = sumRefundedMinor(db(), $orderId);
+                if ($refunded >= (int)$orderTotal) {
+                    // Fully refunded
+                    updateOrderStatus(db(), $orderId, 'REFUNDED', null);
+                } else {
+                    // Partial refund: leave order status as-is (you can add PARTIALLY_REFUNDED if your schema supports it)
+                    // updateOrderStatus(db(), $orderId, 'PARTIALLY_REFUNDED', null);
+                }
+            }
         }
     } catch (Throwable $e) {
         $errors[] = ['index' => $i, 'error' => $e->getMessage()];
