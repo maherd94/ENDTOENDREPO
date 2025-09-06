@@ -40,7 +40,7 @@ $params = [
 $kpiSql = "
   SELECT
     COALESCE(SUM(COALESCE(sd.gross_credit,0) - COALESCE(sd.gross_debit,0)), 0) AS gross_movement,
-    COALESCE(SUM(COALESCE(sd.commission,0)), 0)   AS fee_commission,
+    COALESCE(SUM(COALESCE(sd.processing_fee,0)), 0)   AS fee_processing_fee,
     COALESCE(SUM(COALESCE(sd.markup,0)), 0)       AS fee_markup,
     COALESCE(SUM(COALESCE(sd.scheme_fees,0)), 0)  AS fee_scheme,
     COALESCE(SUM(COALESCE(sd.interchange,0)), 0)  AS fee_interchange,
@@ -50,7 +50,7 @@ $kpiSql = "
     AND (sd.net_currency = :ccy OR sd.gross_currency = :ccy)
 ";
 $kpi = [
-  'gross_movement'=>0, 'fee_commission'=>0, 'fee_markup'=>0, 'fee_scheme'=>0, 'fee_interchange'=>0, 'net_inflow'=>0
+  'gross_movement'=>0, 'fee_processing_fee'=>0, 'fee_markup'=>0, 'fee_scheme'=>0, 'fee_interchange'=>0, 'net_inflow'=>0
 ];
 try {
     $st = $pdo->prepare($kpiSql);
@@ -58,7 +58,7 @@ try {
     $kpi = $st->fetch(PDO::FETCH_ASSOC) ?: $kpi;
 } catch (Throwable $e) { $kpi_error = $e->getMessage(); }
 
-$totalFees = (float)$kpi['fee_commission'] + (float)$kpi['fee_markup'] + (float)$kpi['fee_scheme'] + (float)$kpi['fee_interchange'];
+$totalFees = (float)$kpi['fee_processing_fee'] + (float)$kpi['fee_markup'] + (float)$kpi['fee_scheme'] + (float)$kpi['fee_interchange'];
 
 /* ---------------- Recon rate ---------------- */
 $reconSql = "
@@ -138,7 +138,7 @@ $batchSummarySql = "
     s.net_currency,
     (COALESCE(s.net_credit,0) - COALESCE(s.net_debit,0)) AS net_inflow,
     (COALESCE(s.gross_credit,0) - COALESCE(s.gross_debit,0)) AS gross_movement,
-    COALESCE(s.commission,0)  AS fee_commission,
+    COALESCE(s.processing_fee,0)  AS fee_processing_fee,
     COALESCE(s.markup,0)      AS fee_markup,
     COALESCE(s.scheme_fees,0) AS fee_scheme,
     COALESCE(s.interchange,0) AS fee_interchange
@@ -235,7 +235,7 @@ try {
             <td style="text-align:right;"><?= h($currency) ?> <?= fmtMoney($b['gross_movement']) ?></td>
             <td style="text-align:right;"><?= h($currency) ?> <?= fmtMoney($b['net_inflow']) ?></td>
             <td style="text-align:right;">
-              <?= fmtMoney($b['fee_commission']) ?> /
+              <?= fmtMoney($b['fee_processing_fee']) ?> /
               <?= fmtMoney($b['fee_markup']) ?> /
               <?= fmtMoney($b['fee_scheme']) ?> /
               <?= fmtMoney($b['fee_interchange']) ?>
@@ -335,7 +335,7 @@ try {
     labels: ['Commission','Markup','Scheme','Interchange'],
     datasets: [{
       data: [
-        <?= json_encode((float)$kpi['fee_commission']) ?>,
+        <?= json_encode((float)$kpi['fee_processing_fee']) ?>,
         <?= json_encode((float)$kpi['fee_markup']) ?>,
         <?= json_encode((float)$kpi['fee_scheme']) ?>,
         <?= json_encode((float)$kpi['fee_interchange']) ?>

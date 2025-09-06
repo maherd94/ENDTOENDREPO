@@ -101,7 +101,7 @@ function ensureCoreTables(): void {
           gross_credit NUMERIC(20,4) DEFAULT 0,
           net_debit NUMERIC(20,4) DEFAULT 0,
           net_credit NUMERIC(20,4) DEFAULT 0,
-          commission NUMERIC(20,4) DEFAULT 0,
+          processing_fee NUMERIC(20,4) DEFAULT 0,
           markup NUMERIC(20,4) DEFAULT 0,
           scheme_fees NUMERIC(20,4) DEFAULT 0,
           interchange NUMERIC(20,4) DEFAULT 0,
@@ -124,7 +124,7 @@ function ensureCoreTables(): void {
           net_currency TEXT,
           net_debit NUMERIC(20,4),
           net_credit NUMERIC(20,4),
-          commission NUMERIC(20,4),
+          processing_fee NUMERIC(20,4),
           markup NUMERIC(20,4),
           scheme_fees NUMERIC(20,4),
           interchange NUMERIC(20,4),
@@ -263,7 +263,7 @@ function upsertSettlementParentExact(array $agg, ?string $reportPspRef, string $
                    gross_credit= :gc2,
                    net_debit   = :nd,
                    net_credit  = :nc2,
-                   commission  = :comm,
+                   processing_fee  = :comm,
                    markup      = :markup,
                    scheme_fees = :scheme,
                    interchange = :inter,
@@ -278,7 +278,7 @@ function upsertSettlementParentExact(array $agg, ?string $reportPspRef, string $
             ':gc2'   => $agg['gross_credit'],
             ':nd'    => $agg['net_debit'],
             ':nc2'   => $agg['net_credit'],
-            ':comm'  => $agg['commission'],
+            ':comm'  => $agg['processing_fee'],
             ':markup'=> $agg['markup'],
             ':scheme'=> $agg['scheme_fees'],
             ':inter' => $agg['interchange'],
@@ -291,7 +291,7 @@ function upsertSettlementParentExact(array $agg, ?string $reportPspRef, string $
                 (batch_number, report_psp_reference, report_filename,
                  gross_currency, net_currency,
                  gross_debit, gross_credit, net_debit, net_credit,
-                 commission, markup, scheme_fees, interchange)
+                 processing_fee, markup, scheme_fees, interchange)
             VALUES
                 (:b, :rpr, :f, :gc, :nc, :gd, :gc2, :nd, :nc2, :comm, :markup, :scheme, :inter)
             RETURNING id
@@ -306,7 +306,7 @@ function upsertSettlementParentExact(array $agg, ?string $reportPspRef, string $
             ':gc2'   => $agg['gross_credit'],
             ':nd'    => $agg['net_debit'],
             ':nc2'   => $agg['net_credit'],
-            ':comm'  => $agg['commission'],
+            ':comm'  => $agg['processing_fee'],
             ':markup'=> $agg['markup'],
             ':scheme'=> $agg['scheme_fees'],
             ':inter' => $agg['interchange'],
@@ -346,7 +346,7 @@ function upsertSettlementDetail(array $r, ?int $settlementId): void {
                    net_currency = :nc,
                    net_debit = :ndebit,
                    net_credit = :ncredit,
-                   commission = :comm,
+                   processing_fee = :comm,
                    markup = :markup,
                    scheme_fees = :scheme,
                    interchange = :inter,
@@ -366,7 +366,7 @@ function upsertSettlementDetail(array $r, ?int $settlementId): void {
             ':nc'    => $r['net_currency'],
             ':ndebit'=> $r['net_debit'],
             ':ncredit'=> $r['net_credit'],
-            ':comm'  => $r['commission'],
+            ':comm'  => $r['processing_fee'],
             ':markup'=> $r['markup'],
             ':scheme'=> $r['scheme_fees'],
             ':inter' => $r['interchange'],
@@ -383,7 +383,7 @@ function upsertSettlementDetail(array $r, ?int $settlementId): void {
                  creation_date, timezone,
                  gross_currency, gross_debit, gross_credit,
                  net_currency, net_debit, net_credit,
-                 commission, markup, scheme_fees, interchange,
+                 processing_fee, markup, scheme_fees, interchange,
                  payment_method, payment_method_variant,
                  modification_merchant_reference,
                  batch_number, settlement_id)
@@ -410,7 +410,7 @@ function upsertSettlementDetail(array $r, ?int $settlementId): void {
             ':nc'    => $r['net_currency'],
             ':ndebit'=> $r['net_debit'],
             ':ncredit'=> $r['net_credit'],
-            ':comm'  => $r['commission'],
+            ':comm'  => $r['processing_fee'],
             ':markup'=> $r['markup'],
             ':scheme'=> $r['scheme_fees'],
             ':inter' => $r['interchange'],
@@ -593,7 +593,7 @@ if ($action === 'process' && $method === 'POST') {
                 'gross_credit'  => 0.0,
                 'net_debit'     => 0.0,
                 'net_credit'    => 0.0,
-                'commission'    => 0.0,
+                'processing_fee'    => 0.0,
                 'markup'        => 0.0,
                 'scheme_fees'   => 0.0,
                 'interchange'   => 0.0,
@@ -603,7 +603,7 @@ if ($action === 'process' && $method === 'POST') {
         $aggregates[$batch]['gross_credit']   += (float) (($row['Gross Credit (GC)'] ?? '0') ?: 0);
         $aggregates[$batch]['net_debit']      += (float) (($row['Net Debit (NC)'] ?? '0') ?: 0);
         $aggregates[$batch]['net_credit']     += (float) (($row['Net Credit (NC)'] ?? '0') ?: 0);
-        $aggregates[$batch]['commission']     += (float) (($row['Commission (NC)'] ?? '0') ?: 0);
+        $aggregates[$batch]['processing_fee']     += (float) (($row['Commission (NC)'] ?? '0') ?: 0);
         $aggregates[$batch]['markup']         += (float) (($row['Markup (NC)'] ?? '0') ?: 0);
         $aggregates[$batch]['scheme_fees']    += (float) (($row['Scheme Fees (NC)'] ?? '0') ?: 0);
         $aggregates[$batch]['interchange']    += (float) (($row['Interchange (NC)'] ?? '0') ?: 0);
@@ -632,7 +632,7 @@ if ($action === 'process' && $method === 'POST') {
         $netCcy       = (string)($row['Net Currency'] ?? '');
         $ndebit       = (string)($row['Net Debit (NC)'] ?? '0');
         $ncredit      = (string)($row['Net Credit (NC)'] ?? '0');
-        $commission   = (string)($row['Commission (NC)'] ?? '0');
+        $processing_fee   = (string)($row['Commission (NC)'] ?? '0');
         $markup       = (string)($row['Markup (NC)'] ?? '0');
         $schemeFees   = (string)($row['Scheme Fees (NC)'] ?? '0');
         $interchange  = (string)($row['Interchange (NC)'] ?? '0');
@@ -656,7 +656,7 @@ if ($action === 'process' && $method === 'POST') {
             'net_currency'                   => $netCcy ?: null,
             'net_debit'                      => $ndebit === '' ? '0' : $ndebit,
             'net_credit'                     => $ncredit === '' ? '0' : $ncredit,
-            'commission'                     => $commission === '' ? '0' : $commission,
+            'processing_fee'                     => $processing_fee === '' ? '0' : $processing_fee,
             'markup'                         => $markup === '' ? '0' : $markup,
             'scheme_fees'                    => $schemeFees === '' ? '0' : $schemeFees,
             'interchange'                    => $interchange === '' ? '0' : $interchange,

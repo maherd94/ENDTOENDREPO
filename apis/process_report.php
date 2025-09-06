@@ -51,7 +51,6 @@ function downloadCsv(string $url, string $apiKey, ?string &$serverFilename = nul
     curl_close($ch);
     if ($status < 200 || $status >= 300) throw new RuntimeException("Download failed, HTTP $status");
 
-    // Try to find filename from headers; fallback to path basename
     $serverFilename = null;
     if (preg_match('/Content-Disposition:\s*attachment;\s*filename="?([^"]+)"?/i', $headers, $m)) {
         $serverFilename = trim($m[1]);
@@ -73,11 +72,9 @@ function readCsv(string $file): Generator {
     $fh = fopen($file, 'r');
     if (!$fh) throw new RuntimeException('Cannot open CSV');
 
-    // delimiter ',', enclosure '"', escape '\\'
     $headers = fgetcsv($fh, 0, ',', '"', '\\');
     if ($headers === false) { fclose($fh); throw new RuntimeException('Empty CSV'); }
 
-    // Normalize headers & strip BOM on first header if present
     $headers = array_map(static fn($h) => trim((string)$h), $headers);
     if (isset($headers[0])) {
         $headers[0] = preg_replace('/^\xEF\xBB\xBF/', '', $headers[0]);
@@ -120,7 +117,7 @@ function upsertSettlementParent(array $agg, ?string $reportPspRef, string $repor
                    gross_credit= COALESCE(gross_credit,0)+ :gc2,
                    net_debit   = COALESCE(net_debit,0)  + :nd,
                    net_credit  = COALESCE(net_credit,0) + :nc2,
-                   commission  = COALESCE(commission,0) + :comm,
+                   processing_fee  = COALESCE(processing_fee,0) + :comm,
                    markup      = COALESCE(markup,0)     + :markup,
                    scheme_fees = COALESCE(scheme_fees,0)+ :scheme,
                    interchange = COALESCE(interchange,0)+ :inter
@@ -134,7 +131,7 @@ function upsertSettlementParent(array $agg, ?string $reportPspRef, string $repor
             ':gc2'   => $agg['gross_credit'],
             ':nd'    => $agg['net_debit'],
             ':nc2'   => $agg['net_credit'],
-            ':comm'  => $agg['commission'],
+            ':comm'  => $agg['processing_fee'],     // now represents Processing Fee total
             ':markup'=> $agg['markup'],
             ':scheme'=> $agg['scheme_fees'],
             ':inter' => $agg['interchange'],
@@ -148,7 +145,7 @@ function upsertSettlementParent(array $agg, ?string $reportPspRef, string $repor
             (batch_number, report_psp_reference, report_filename,
              gross_currency, net_currency,
              gross_debit, gross_credit, net_debit, net_credit,
-             commission, markup, scheme_fees, interchange)
+             processing_fee, markup, scheme_fees, interchange)
         VALUES
             (:b, :rpr, :f, :gc, :nc, :gd, :gc2, :nd, :nc2, :comm, :markup, :scheme, :inter)
         RETURNING id
@@ -163,7 +160,7 @@ function upsertSettlementParent(array $agg, ?string $reportPspRef, string $repor
         ':gc2'   => $agg['gross_credit'],
         ':nd'    => $agg['net_debit'],
         ':nc2'   => $agg['net_credit'],
-        ':comm'  => $agg['commission'],
+        ':comm'  => $agg['processing_fee'],     // now represents Processing Fee total
         ':markup'=> $agg['markup'],
         ':scheme'=> $agg['scheme_fees'],
         ':inter' => $agg['interchange'],
@@ -201,7 +198,7 @@ function upsertSettlementDetail(array $r, ?int $settlementId): void {
                    net_currency = :nc,
                    net_debit = :ndebit,
                    net_credit = :ncredit,
-                   commission = :comm,
+                   processing_fee = :comm,
                    markup = :markup,
                    scheme_fees = :scheme,
                    interchange = :inter,
@@ -221,7 +218,7 @@ function upsertSettlementDetail(array $r, ?int $settlementId): void {
             ':nc'    => $r['net_currency'],
             ':ndebit'=> $r['net_debit'],
             ':ncredit'=> $r['net_credit'],
-            ':comm'  => $r['commission'],
+            ':comm'  => $r['processing_fee'],  // now = processing fee per row (0.5 for Settled, else 0)
             ':markup'=> $r['markup'],
             ':scheme'=> $r['scheme_fees'],
             ':inter' => $r['interchange'],
@@ -240,7 +237,7 @@ function upsertSettlementDetail(array $r, ?int $settlementId): void {
              creation_date, timezone,
              gross_currency, gross_debit, gross_credit,
              net_currency, net_debit, net_credit,
-             commission, markup, scheme_fees, interchange,
+             processing_fee, markup, scheme_fees, interchange,
              payment_method, payment_method_variant,
              modification_merchant_reference,
              batch_number, settlement_id)
@@ -267,7 +264,7 @@ function upsertSettlementDetail(array $r, ?int $settlementId): void {
         ':nc'    => $r['net_currency'],
         ':ndebit'=> $r['net_debit'],
         ':ncredit'=> $r['net_credit'],
-        ':comm'  => $r['commission'],
+        ':comm'  => $r['processing_fee'],  // now = processing fee per row (0.5 for Settled, else 0)
         ':markup'=> $r['markup'],
         ':scheme'=> $r['scheme_fees'],
         ':inter' => $r['interchange'],
@@ -317,7 +314,7 @@ try {
     $ordersUpdated = 0;
     $txnsInserted = 0;
 
-    // Prepared stmts for order/txn
+    // Prepared stmts
     $findOrderByNumber = db()->prepare("SELECT id FROM orders WHERE order_number = :mref LIMIT 1");
     $findOrderByTxnPsp = db()->prepare("SELECT order_id FROM transactions WHERE psp_ref = :psp ORDER BY id DESC LIMIT 1");
     $existSettledTxn   = db()->prepare("SELECT 1 FROM transactions WHERE order_id = :oid AND type = 'SETTLED' AND psp_ref = :psp LIMIT 1");
@@ -326,26 +323,25 @@ try {
         VALUES (:order_id, 'SETTLED', 'SUCCESS', :amount_minor, :currency, :psp_ref, 'REPORT')
     ");
     $updOrderSettled = db()->prepare("UPDATE orders SET status = 'SETTLED', settled_at = NOW() WHERE id = :id");
+    $updOrderProcessingFee = db()->prepare("UPDATE orders SET processing_fee = 0.5 WHERE id = :id");
 
-    // Aggregates keyed by batch
-    $aggregates = []; // batch => totals
+    $aggregates = [];
 
     foreach (readCsv($tmpCsv) as $r) {
         $rowsParsed++;
 
-        $psp         = (string)($r['Psp Reference'] ?? '');
-        $mref        = (string)($r['Merchant Reference'] ?? '');
-        $type        = (string)($r['Type'] ?? '');
-        $creation    = (string)($r['Creation Date'] ?? '');
-        $tz          = (string)($r['TimeZone'] ?? '');
-        $modRef      = (string)($r['Modification Reference'] ?? '');
+        $psp   = (string)($r['Psp Reference'] ?? '');
+        $mref  = (string)($r['Merchant Reference'] ?? '');
+        $type  = (string)($r['Type'] ?? '');
+        $creation = (string)($r['Creation Date'] ?? '');
+        $tz    = (string)($r['TimeZone'] ?? '');
+        $modRef= (string)($r['Modification Reference'] ?? '');
         $grossCcy    = (string)($r['Gross Currency'] ?? '');
         $grossDebit  = (string)($r['Gross Debit (GC)'] ?? '0');
         $grossCredit = (string)($r['Gross Credit (GC)'] ?? '0');
         $netCcy      = (string)($r['Net Currency'] ?? '');
         $netDebit    = (string)($r['Net Debit (NC)'] ?? '0');
         $netCredit   = (string)($r['Net Credit (NC)'] ?? '0');
-        $commission  = (string)($r['Commission (NC)'] ?? '0');
         $markup      = (string)($r['Markup (NC)'] ?? '0');
         $schemeFees  = (string)($r['Scheme Fees (NC)'] ?? '0');
         $interchange = (string)($r['Interchange (NC)'] ?? '0');
@@ -356,7 +352,19 @@ try {
 
         if ($psp === '' && $type === '' && $batch === 0) continue;
 
-        // Build detail record payload
+        // Only rows with ord_ (or ord-) merchant refs
+        if ($mref === '' || !preg_match('~\bord[_-]~i', $mref)) continue;
+
+        // Skip Fee / Balance Transfer
+        $typeLower = strtolower($type);
+        if ($typeLower === 'fee' || $typeLower === 'balance transfer') continue;
+
+        // Processing fee per kept row:
+        //  - 0.5 for Settled rows
+        //  - 0   for any other (kept) type
+        $processingFeeThisRow = (strcasecmp($type, 'Settled') === 0) ? '0.5' : '0';
+
+        // Build detail payload; processing_fee now carries "processing fee"
         $detail = [
             'psp_reference'                  => ($psp ?: null),
             'modification_reference'         => ($modRef ?: null),
@@ -370,7 +378,7 @@ try {
             'net_currency'                   => ($netCcy ?: null),
             'net_debit'                      => ($netDebit === '' ? '0' : $netDebit),
             'net_credit'                     => ($netCredit === '' ? '0' : $netCredit),
-            'commission'                     => ($commission === '' ? '0' : $commission),
+            'processing_fee'                     => $processingFeeThisRow, // <-- processing fee here
             'markup'                         => ($markup === '' ? '0' : $markup),
             'scheme_fees'                    => ($schemeFees === '' ? '0' : $schemeFees),
             'interchange'                    => ($interchange === '' ? '0' : $interchange),
@@ -380,7 +388,7 @@ try {
             'batch_number'                   => $batch,
         ];
 
-        // Aggregate per batch for settlements parent
+        // Aggregate (processing_fee = processing fee)
         if (!isset($aggregates[$batch])) {
             $aggregates[$batch] = [
                 'batch_number'  => $batch,
@@ -390,7 +398,7 @@ try {
                 'gross_credit'  => 0.0,
                 'net_debit'     => 0.0,
                 'net_credit'    => 0.0,
-                'commission'    => 0.0,
+                'processing_fee'    => 0.0, // processing fee total
                 'markup'        => 0.0,
                 'scheme_fees'   => 0.0,
                 'interchange'   => 0.0,
@@ -400,12 +408,12 @@ try {
         $aggregates[$batch]['gross_credit'] += (float)$detail['gross_credit'];
         $aggregates[$batch]['net_debit']    += (float)$detail['net_debit'];
         $aggregates[$batch]['net_credit']   += (float)$detail['net_credit'];
-        $aggregates[$batch]['commission']   += (float)$detail['commission'];
+        $aggregates[$batch]['processing_fee']   += (float)$detail['processing_fee']; // processing fee total
         $aggregates[$batch]['markup']       += (float)$detail['markup'];
         $aggregates[$batch]['scheme_fees']  += (float)$detail['scheme_fees'];
         $aggregates[$batch]['interchange']  += (float)$detail['interchange'];
 
-        // Upsert parent now to get settlement_id (idempotent per (batch, file))
+        // Upsert parent to get settlement_id
         $sid = upsertSettlementParent($aggregates[$batch], $reportPspRef ?: null, $reportFileName);
         $settlementParentsTouched++;
 
@@ -413,26 +421,32 @@ try {
         upsertSettlementDetail($detail, $sid);
         $detailsUpserted++;
 
-        // If it's a settlement line, also reflect into transactions & orders
-        if (strcasecmp((string)$type, 'Settled') === 0) {
-            $netMovement = (float)$detail['net_credit'] - (float)$detail['net_debit']; // credits positive
-            $ccy = $netCcy ?: ($grossCcy ?: 'AED');
-            $amountMinor = toMinor((string)$netMovement, $ccy);
+        // Resolve order to update processing_fee and (if Settled) insert SETTLED txn + mark order settled
+        $orderId = null;
+        if ($mref !== '') {
+            $findOrderByNumber->execute([':mref' => $mref]);
+            $orderId = $findOrderByNumber->fetchColumn();
+        }
+        if (!$orderId && $psp !== '') {
+            $findOrderByTxnPsp->execute([':psp' => $psp]);
+            $orderId = $findOrderByTxnPsp->fetchColumn();
+        }
 
-            // Resolve order
-            $orderId = null;
-            if ($mref !== '') {
-                $findOrderByNumber->execute([':mref' => $mref]);
-                $orderId = $findOrderByNumber->fetchColumn();
-            }
-            if (!$orderId && $psp !== '') {
-                $findOrderByTxnPsp->execute([':psp' => $psp]);
-                $orderId = $findOrderByTxnPsp->fetchColumn();
-            }
-            if ($orderId) {
-                $orderId = (int)$orderId;
+        if ($orderId) {
+            $orderId = (int)$orderId;
 
-                // Idempotent-ish insert
+            // Always set processing_fee = 0.5 for matched orders (per requirements)
+            try {
+                $updOrderProcessingFee->execute([':id' => $orderId]);
+                if ($updOrderProcessingFee->rowCount() > 0) $ordersUpdated++;
+            } catch (Throwable $e) { /* ignore missing column */ }
+
+            // For Settled rows: insert SETTLED txn (idempotent-ish) + set order status
+            if (strcasecmp((string)$type, 'Settled') === 0) {
+                $netMovement = (float)$detail['net_credit'] - (float)$detail['net_debit']; // credits positive
+                $ccy = $detail['net_currency'] ?: ($detail['gross_currency'] ?: 'AED');
+                $amountMinor = toMinor((string)$netMovement, $ccy);
+
                 $existSettledTxn->execute([':oid' => $orderId, ':psp' => ($psp ?: $mref)]);
                 if (!$existSettledTxn->fetchColumn()) {
                     try {

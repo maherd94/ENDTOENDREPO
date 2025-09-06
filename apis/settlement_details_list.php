@@ -24,7 +24,7 @@ try {
         sd.net_currency,
         sd.net_debit,
         sd.net_credit,
-        sd.commission,
+        sd.processing_fee,
         sd.markup,
         sd.scheme_fees,
         sd.interchange,

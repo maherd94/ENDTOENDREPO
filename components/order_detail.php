@@ -95,7 +95,7 @@ try {
         sd.net_currency,
         sd.net_debit,
         sd.net_credit,
-        sd.commission,
+        sd.processing_fee,
         sd.markup,
         sd.scheme_fees,
         sd.interchange,
@@ -118,7 +118,7 @@ try {
     $sum = [
         'settled_nc' => 0.0, // sum of (net_credit - net_debit) for rows where type='Settled'
         'net_all'    => 0.0, // sum across ALL rows (authoritative net movement)
-        'commission' => 0.0,
+        'processing_fee' => 0.0,
         'markup'     => 0.0,
         'scheme'     => 0.0,
         'inter'      => 0.0,
@@ -131,7 +131,7 @@ try {
         if (strcasecmp((string)$r['type'], 'Settled') === 0) {
             $sum['settled_nc'] += $nc;
         }
-        $sum['commission'] += (float)($r['commission'] ?? 0);
+        $sum['processing_fee'] += (float)($r['processing_fee'] ?? 0);
         $sum['markup']     += (float)($r['markup'] ?? 0);
         $sum['scheme']     += (float)($r['scheme_fees'] ?? 0);
         $sum['inter']      += (float)($r['interchange'] ?? 0);
@@ -139,7 +139,7 @@ try {
             $settleCurrency = $r['net_currency'] ?: $settleCurrency;
         }
     }
-    $totalFees = $sum['commission'] + $sum['markup'] + $sum['scheme'] + $sum['inter'];
+    $totalFees = $sum['processing_fee'] + $sum['markup'] + $sum['scheme'] + $sum['inter'];
     $netToMerchant_calc = $sum['settled_nc'] - $totalFees;   // settled minus fees
     $netToMerchant_netAll = $sum['net_all'];                 // authoritative net movement from the report
     $ccy = $settleCurrency ?: ($order['currency'] ?? 'AED');
@@ -285,7 +285,7 @@ try {
             <td><?= $r['psp_reference'] ? '<code>'.h($r['psp_reference']).'</code>' : '—' ?></td>
             <td class="right"><?= fmt_dec($r['net_debit'], $r['net_currency'] ?: $ccy) ?></td>
             <td class="right"><?= fmt_dec($r['net_credit'], $r['net_currency'] ?: $ccy) ?></td>
-            <td class="right"><?= fmt_dec($r['commission'], $ccy) ?></td>
+            <td class="right"><?= fmt_dec($r['processing_fee'], $ccy) ?></td>
             <td class="right"><?= fmt_dec($r['markup'], $ccy) ?></td>
             <td class="right"><?= fmt_dec($r['scheme_fees'], $ccy) ?></td>
             <td class="right"><?= fmt_dec($r['interchange'], $ccy) ?></td>
@@ -299,7 +299,7 @@ try {
           <th colspan="4" class="right">Totals:</th>
           <th class="right"><?= fmt_dec(array_sum(array_map(static fn($x)=>(float)($x['net_debit']??0), $srows)), $ccy) ?></th>
           <th class="right"><?= fmt_dec(array_sum(array_map(static fn($x)=>(float)($x['net_credit']??0), $srows)), $ccy) ?></th>
-          <th class="right"><?= fmt_dec($sum['commission'], $ccy) ?></th>
+          <th class="right"><?= fmt_dec($sum['processing_fee'], $ccy) ?></th>
           <th class="right"><?= fmt_dec($sum['markup'], $ccy) ?></th>
           <th class="right"><?= fmt_dec($sum['scheme'], $ccy) ?></th>
           <th class="right"><?= fmt_dec($sum['inter'], $ccy) ?></th>

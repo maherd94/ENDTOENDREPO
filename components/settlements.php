@@ -27,7 +27,7 @@ try {
         s.gross_currency, s.net_currency,
         s.gross_debit, s.gross_credit,
         s.net_debit,   s.net_credit,
-        s.commission, s.markup, s.scheme_fees, s.interchange,
+        s.processing_fee, s.markup, s.scheme_fees, s.interchange,
         COALESCE(x.rows_total, 0)         AS rows_total,
         COALESCE(x.rows_settled, 0)       AS rows_settled,
         COALESCE(x.net_move, 0)           AS net_movement
@@ -70,7 +70,7 @@ try {
             <th class="right">Rows</th>
             <th class="right">Settled rows</th>
             <th class="right">Net movement (NC)</th>
-            <th class="right">Commission</th>
+            <th class="right">Processing Fee</th>
             <th class="right">Markup</th>
             <th class="right">Scheme</th>
             <th class="right">Interchange</th>
@@ -88,7 +88,7 @@ try {
             <td class="right"><?= (int)$r['rows_total'] ?></td>
             <td class="right"><?= (int)$r['rows_settled'] ?></td>
             <td class="right"><?= fmtMoney($r['net_movement']).' '.h($r['net_currency'] ?: '') ?></td>
-            <td class="right"><?= fmtMoney($r['commission']) ?></td>
+            <td class="right"><?= fmtMoney($r['processing_fee']) ?></td>
             <td class="right"><?= fmtMoney($r['markup']) ?></td>
             <td class="right"><?= fmtMoney($r['scheme_fees']) ?></td>
             <td class="right"><?= fmtMoney($r['interchange']) ?></td>
@@ -168,7 +168,7 @@ try {
           <td>${dtStr}</td>
           <td class="right">${fmt(r.net_debit)} ${r.net_currency || ''}</td>
           <td class="right">${fmt(r.net_credit)} ${r.net_currency || ''}</td>
-          <td class="right">${fmt(r.commission)}</td>
+          <td class="right">${fmt(r.processing_fee)}</td>
           <td class="right">${fmt(r.markup)}</td>
           <td class="right">${fmt(r.scheme_fees)}</td>
           <td class="right">${fmt(r.interchange)}</td>
