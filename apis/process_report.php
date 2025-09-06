@@ -101,10 +101,14 @@ function toMinor(string $amt, string $ccy): int {
 }
 
 /* --- upserts (assumes tables already exist) ------------------- */
-function upsertSettlementParent(array $agg, ?string $reportPspRef, string $reportFile): int {
+/**
+ * Upsert parent by batch/report file using **per-row deltas** (prevents double counting).
+ * We **do not** update 'processing_fee' here; we recompute it from details at the end.
+ */
+function upsertSettlementParent(array $delta, ?string $reportPspRef, string $reportFile): int {
     $pdo = db();
     $sel = $pdo->prepare("SELECT id FROM settlements WHERE batch_number = :b AND report_filename = :f LIMIT 1");
-    $sel->execute([':b' => $agg['batch_number'], ':f' => $reportFile]);
+    $sel->execute([':b' => $delta['batch_number'], ':f' => $reportFile]);
     $row = $sel->fetch(PDO::FETCH_ASSOC);
 
     if ($row) {
@@ -117,7 +121,7 @@ function upsertSettlementParent(array $agg, ?string $reportPspRef, string $repor
                    gross_credit= COALESCE(gross_credit,0)+ :gc2,
                    net_debit   = COALESCE(net_debit,0)  + :nd,
                    net_credit  = COALESCE(net_credit,0) + :nc2,
-                   processing_fee  = COALESCE(processing_fee,0) + :comm,
+                   -- processing_fee intentionally not updated here; recalculated from details later
                    markup      = COALESCE(markup,0)     + :markup,
                    scheme_fees = COALESCE(scheme_fees,0)+ :scheme,
                    interchange = COALESCE(interchange,0)+ :inter
@@ -125,16 +129,15 @@ function upsertSettlementParent(array $agg, ?string $reportPspRef, string $repor
         ");
         $upd->execute([
             ':rpr'   => $reportPspRef,
-            ':gc'    => $agg['gross_currency'] ?? null,
-            ':nc'    => $agg['net_currency'] ?? null,
-            ':gd'    => $agg['gross_debit'],
-            ':gc2'   => $agg['gross_credit'],
-            ':nd'    => $agg['net_debit'],
-            ':nc2'   => $agg['net_credit'],
-            ':comm'  => $agg['processing_fee'],     // now represents Processing Fee total
-            ':markup'=> $agg['markup'],
-            ':scheme'=> $agg['scheme_fees'],
-            ':inter' => $agg['interchange'],
+            ':gc'    => $delta['gross_currency'] ?? null,
+            ':nc'    => $delta['net_currency'] ?? null,
+            ':gd'    => $delta['gross_debit'],
+            ':gc2'   => $delta['gross_credit'],
+            ':nd'    => $delta['net_debit'],
+            ':nc2'   => $delta['net_credit'],
+            ':markup'=> $delta['markup'],
+            ':scheme'=> $delta['scheme_fees'],
+            ':inter' => $delta['interchange'],
             ':id'    => (int)$row['id'],
         ]);
         return (int)$row['id'];
@@ -147,23 +150,24 @@ function upsertSettlementParent(array $agg, ?string $reportPspRef, string $repor
              gross_debit, gross_credit, net_debit, net_credit,
              processing_fee, markup, scheme_fees, interchange)
         VALUES
-            (:b, :rpr, :f, :gc, :nc, :gd, :gc2, :nd, :nc2, :comm, :markup, :scheme, :inter)
+            (:b, :rpr, :f, :gc, :nc, :gd, :gc2, :nd, :nc2,
+             0,              -- processing_fee placeholder; will be recomputed from details
+             :markup, :scheme, :inter)
         RETURNING id
     ");
     $ins->execute([
-        ':b'     => $agg['batch_number'],
+        ':b'     => $delta['batch_number'],
         ':rpr'   => $reportPspRef,
         ':f'     => $reportFile,
-        ':gc'    => $agg['gross_currency'] ?? null,
-        ':nc'    => $agg['net_currency'] ?? null,
-        ':gd'    => $agg['gross_debit'],
-        ':gc2'   => $agg['gross_credit'],
-        ':nd'    => $agg['net_debit'],
-        ':nc2'   => $agg['net_credit'],
-        ':comm'  => $agg['processing_fee'],     // now represents Processing Fee total
-        ':markup'=> $agg['markup'],
-        ':scheme'=> $agg['scheme_fees'],
-        ':inter' => $agg['interchange'],
+        ':gc'    => $delta['gross_currency'] ?? null,
+        ':nc'    => $delta['net_currency'] ?? null,
+        ':gd'    => $delta['gross_debit'],
+        ':gc2'   => $delta['gross_credit'],
+        ':nd'    => $delta['net_debit'],
+        ':nc2'   => $delta['net_credit'],
+        ':markup'=> $delta['markup'],
+        ':scheme'=> $delta['scheme_fees'],
+        ':inter' => $delta['interchange'],
     ]);
     return (int)$ins->fetchColumn();
 }
@@ -218,7 +222,7 @@ function upsertSettlementDetail(array $r, ?int $settlementId): void {
             ':nc'    => $r['net_currency'],
             ':ndebit'=> $r['net_debit'],
             ':ncredit'=> $r['net_credit'],
-            ':comm'  => $r['processing_fee'],  // now = processing fee per row (0.5 for Settled, else 0)
+            ':comm'  => $r['processing_fee'], // now = processing fee per row (0.5 for Settled, else 0)
             ':markup'=> $r['markup'],
             ':scheme'=> $r['scheme_fees'],
             ':inter' => $r['interchange'],
@@ -264,7 +268,7 @@ function upsertSettlementDetail(array $r, ?int $settlementId): void {
         ':nc'    => $r['net_currency'],
         ':ndebit'=> $r['net_debit'],
         ':ncredit'=> $r['net_credit'],
-        ':comm'  => $r['processing_fee'],  // now = processing fee per row (0.5 for Settled, else 0)
+        ':comm'  => $r['processing_fee'], // now = processing fee per row (0.5 for Settled, else 0)
         ':markup'=> $r['markup'],
         ':scheme'=> $r['scheme_fees'],
         ':inter' => $r['interchange'],
@@ -325,7 +329,8 @@ try {
     $updOrderSettled = db()->prepare("UPDATE orders SET status = 'SETTLED', settled_at = NOW() WHERE id = :id");
     $updOrderProcessingFee = db()->prepare("UPDATE orders SET processing_fee = 0.5 WHERE id = :id");
 
-    $aggregates = [];
+    // Track touched settlement ids for final processing_fee (processing fee) recompute
+    $touchedSettlementIds = [];
 
     foreach (readCsv($tmpCsv) as $r) {
         $rowsParsed++;
@@ -388,33 +393,24 @@ try {
             'batch_number'                   => $batch,
         ];
 
-        // Aggregate (processing_fee = processing fee)
-        if (!isset($aggregates[$batch])) {
-            $aggregates[$batch] = [
-                'batch_number'  => $batch,
-                'gross_currency'=> $grossCcy ?: null,
-                'net_currency'  => $netCcy ?: null,
-                'gross_debit'   => 0.0,
-                'gross_credit'  => 0.0,
-                'net_debit'     => 0.0,
-                'net_credit'    => 0.0,
-                'processing_fee'    => 0.0, // processing fee total
-                'markup'        => 0.0,
-                'scheme_fees'   => 0.0,
-                'interchange'   => 0.0,
-            ];
-        }
-        $aggregates[$batch]['gross_debit']  += (float)$detail['gross_debit'];
-        $aggregates[$batch]['gross_credit'] += (float)$detail['gross_credit'];
-        $aggregates[$batch]['net_debit']    += (float)$detail['net_debit'];
-        $aggregates[$batch]['net_credit']   += (float)$detail['net_credit'];
-        $aggregates[$batch]['processing_fee']   += (float)$detail['processing_fee']; // processing fee total
-        $aggregates[$batch]['markup']       += (float)$detail['markup'];
-        $aggregates[$batch]['scheme_fees']  += (float)$detail['scheme_fees'];
-        $aggregates[$batch]['interchange']  += (float)$detail['interchange'];
+        // Per-row delta for the parent (no double counting)
+        $delta = [
+            'batch_number'  => $batch,
+            'gross_currency'=> $grossCcy ?: null,
+            'net_currency'  => $netCcy ?: null,
+            'gross_debit'   => (float)$detail['gross_debit'],
+            'gross_credit'  => (float)$detail['gross_credit'],
+            'net_debit'     => (float)$detail['net_debit'],
+            'net_credit'    => (float)$detail['net_credit'],
+            // processing_fee intentionally excluded here (we'll recompute from details)
+            'markup'        => (float)$detail['markup'],
+            'scheme_fees'   => (float)$detail['scheme_fees'],
+            'interchange'   => (float)$detail['interchange'],
+        ];
 
-        // Upsert parent to get settlement_id
-        $sid = upsertSettlementParent($aggregates[$batch], $reportPspRef ?: null, $reportFileName);
+        // Upsert parent (deltas only)
+        $sid = upsertSettlementParent($delta, $reportPspRef ?: null, $reportFileName);
+        $touchedSettlementIds[$sid] = true;
         $settlementParentsTouched++;
 
         // Upsert details row
@@ -465,6 +461,23 @@ try {
                     if ($updOrderSettled->rowCount() > 0) $ordersUpdated++;
                 } catch (Throwable $e) { /* ignore if status enum missing */ }
             }
+        }
+    }
+
+    // FINAL STEP: Recompute parent processing_fee (processing fee) = SUM(details.processing_fee)
+    if (!empty($touchedSettlementIds)) {
+        $pdo = db();
+        $recalc = $pdo->prepare("
+            UPDATE settlements s
+               SET processing_fee = COALESCE((
+                       SELECT SUM(d.processing_fee)
+                         FROM settlement_details d
+                        WHERE d.settlement_id = s.id
+                   ), 0)
+             WHERE s.id = :id
+        ");
+        foreach (array_keys($touchedSettlementIds) as $sid) {
+            $recalc->execute([':id' => (int)$sid]);
         }
     }
 
