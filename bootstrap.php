@@ -23,8 +23,10 @@ if (file_exists($autoloader)) {
  * Small env helper with default
  */
 function env(string $key, $default = null) {
-    if (array_key_exists($key, $_ENV)) return $_ENV[$key];
     $v = getenv($key);
+    if ($v !== false) return $v;
+    if (array_key_exists($key, $_ENV)) return $_ENV[$key];
+    
     return $v !== false ? $v : $default;
 }
 
