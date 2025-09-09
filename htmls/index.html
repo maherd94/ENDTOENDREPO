@@ -9,28 +9,32 @@
   <script src="/js/app.js" defer></script>
 </head>
 <body>
-  <aside class="sidebar">
-    <div class="brand">Internal System</div>
-    <nav>
-      <a href="#" data-route="dashboard" class="active">Dashboard</a>
-      <a href="#" data-route="customers">Customers</a> 
-      <a href="#" data-route="orders">Orders</a>
-      <a href="#" data-route="stores">Stores</a>
-      <a href="#" data-route="products">Products</a>
-      <a href="#" data-route="invoices">Invoices</a>
-      <a href="#" data-route="settlements">Settlements</a>
-      <a href="#" data-route="reconciliation">Reconciliation</a>
-      <a href="#" data-route="reports">Reports</a>
-      <a href="#" data-route="chargebacks">Chargebacks</a>
-      <a href="#" data-route="webhooks">Webhooks</a>
-    </nav>
-  </aside>
-
-  <main class="content">
-    <header class="topbar">
-      <div class="title" id="pageTitle">Dashboard</div>
+    <!-- New top header (brand + horizontal nav + sticky title bar) -->
+    <header class="masthead">
+      <div class="topnav">
+        <div class="brand">Internal System</div>
+        <nav class="menu">
+          <a href="#" data-route="dashboard" class="active">Dashboard</a>
+          <a href="#" data-route="customers">Customers</a> 
+          <a href="#" data-route="orders">Orders</a>
+          <a href="#" data-route="stores">Stores</a>
+          <a href="#" data-route="products">Products</a>
+          <a href="#" data-route="invoices">Invoices</a>
+          <a href="#" data-route="settlements">Settlements</a>
+          <a href="#" data-route="reconciliation">Reconciliation</a>
+          <a href="#" data-route="reports">Reports</a>
+          <a href="#" data-route="chargebacks">Chargebacks</a>
+          <a href="#" data-route="webhooks">Webhooks</a>
+        </nav>
+      </div>
+  
+      <div class="subbar">
+        <div class="title" id="pageTitle">Dashboard</div>
+      </div>
     </header>
-    <section id="app">Loading…</section>
-  </main>
-</body>
+  
+    <main class="content">
+      <section id="app">Loading…</section>
+    </main>
+  </body>
 </html>

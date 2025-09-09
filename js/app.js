@@ -20,7 +20,7 @@
           $("#app").html(`<div class="card"><h3>Error</h3><p>${xhr.status} ${xhr.statusText}</p></div>`);
         }
       });
-      $(".sidebar nav a").removeClass("active").filter(`[data-route="${name}"]`).addClass("active");
+      $(".topnav nav a").removeClass("active").filter(`[data-route="${name}"]`).addClass("active");
     }
   
     // load order detail with id
@@ -32,11 +32,11 @@
           $("#app").html(`<div class="card"><h3>Error</h3><p>${xhr.status} ${xhr.statusText}</p></div>`);
         }
       });
-      $(".sidebar nav a").removeClass("active").filter(`[data-route="orders"]`).addClass("active");
+      $(".topnav nav a").removeClass("active").filter(`[data-route="orders"]`).addClass("active");
     }
   
     // sidebar nav
-    $(document).on("click", ".sidebar nav a", function (e) {
+    $(document).on("click", ".topnav nav a", function (e) {
       e.preventDefault();
       const route = $(this).data("route");
       history.replaceState({}, "", `#${route}`);
